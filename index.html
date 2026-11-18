@@ -32,6 +32,14 @@
   .btn{flex:none;border:0;border-radius:10px;padding:8px 10px;background:var(--accent);color:var(--accent-text);font-size:14px;text-decoration:none}
   .dl{background:transparent;color:var(--accent);padding:8px 6px;font-size:20px}
   .empty{color:var(--hint);text-align:center;margin-top:40px}
+  .star{flex:none;border:0;background:transparent;font-size:22px;padding:4px 6px;color:var(--hint)}
+  .star.on{color:#f5a623}
+  .tab small{opacity:.7;margin-left:4px}
+  .sort{color:var(--hint);font-size:13px;margin:0 2px 4px}
+  .zoom{display:flex;gap:6px}
+  .zoom .btn{padding:8px 12px;font-weight:700}
+  #vbody.fit canvas,#vbody.fit img{width:100%}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#000c;color:#fff;padding:8px 14px;border-radius:12px;font-size:14px;z-index:20}
   #viewer{display:none;position:fixed;inset:0;background:var(--bg);z-index:10;flex-direction:column}
   #vbar{display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--card)}
   #vtitle{flex:1;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -52,7 +60,8 @@
   <div id="vbar">
     <button class="btn" onclick="closeViewer()">✕</button>
     <span id="vtitle"></span>
-    <a class="btn" id="vdl">⬇ Скачать</a>
+    <span class="zoom"><button class="btn" onclick="zoomBy(-0.25)">−</button><button class="btn" onclick="zoomBy(0.25)">+</button></span>
+    <a class="btn" id="vdl">⬇</a>
   </div>
   <div id="vbody"></div>
 </div>
@@ -82,33 +91,74 @@ async function dec(buf){
   return crypto.subtle.decrypt({name:"AES-GCM", iv:u.slice(0,12)}, key, u.slice(12));
 }
 async function getFile(x){
-  const r = await fetch("d/" + x.id + ".bin?" + x.date + x.size, {cache:"no-cache"});
-  return dec(await r.arrayBuffer());
+  const url = "d/" + x.id + ".bin?" + x.date + x.size;
+  let buf = null, cache = null;
+  try { cache = await caches.open("files-v1"); const hit = await cache.match(url); if (hit) buf = await hit.arrayBuffer(); } catch (e) {}
+  if (!buf) {
+    const r = await fetch(url, {cache:"no-cache"});
+    if (!r.ok) throw new Error("файл не найден (" + r.status + ")");
+    if (cache) { try { cache.put(url, r.clone()); } catch (e) {} }
+    buf = await r.arrayBuffer();
+  }
+  return dec(buf);
 }
 function kb(n){ return n > 1048576 ? (n/1048576).toFixed(1) + " МБ" : Math.max(1, Math.round(n/1024)) + " КБ"; }
 
+const LS = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch (e) { return d; } };
+let favs = LS("favs", []), recents = LS("recents", []);
+const fid = x => x.cat + "/" + x.file;
+function toggleFav(i){
+  const id = fid(FILES[i]), k = favs.indexOf(id);
+  if (k >= 0) favs.splice(k, 1); else favs.push(id);
+  localStorage.setItem("favs", JSON.stringify(favs)); render();
+}
+function addRecent(x){
+  recents = [fid(x), ...recents.filter(v => v !== fid(x))].slice(0, 5);
+  localStorage.setItem("recents", JSON.stringify(recents));
+}
+function itemHtml(x, i){
+  return `<div class="item"><span class="ico">${ICO[x.ext] || "📄"}</span>
+     <span class="name"><b>${esc(x.name)}</b><small>${x.ext.toUpperCase()} · ${kb(x.size)} · ${x.date}</small></span>
+     <button class="star ${favs.includes(fid(x))?"on":""}" onclick="toggleFav(${i})">${favs.includes(fid(x))?"★":"☆"}</button>
+     <button class="btn" onclick="openFile(${i})">Открыть</button>
+   </div>`;
+}
 function render(){
-  document.getElementById("tabs").innerHTML = cats.map((c, i) =>
-    `<button class="tab ${c===cur?"on":""}" onclick="cur=cats[${i}];render()">${esc(c)}</button>`).join("");
+  document.getElementById("tabs").innerHTML = cats.map((c, i) => {
+    const n = i === 0 ? FILES.length : FILES.filter(x => x.cat === c).length;
+    return `<button class="tab ${c===cur?"on":""}" onclick="cur=cats[${i}];render()">${esc(c)}<small>${n}</small></button>`;
+  }).join("");
   const q = document.getElementById("q").value.trim().toLowerCase();
   const show = cur === "Все" ? cats.slice(1) : [cur];
+  const idx = FILES.map((x, i) => [x, i]);
   let html = "";
+  if (!q && cur === "Все") {
+    const fv = idx.filter(([x]) => favs.includes(fid(x)));
+    if (fv.length) html += `<h2>⭐ Избранное</h2>` + fv.map(([x, i]) => itemHtml(x, i)).join("");
+    const rc = recents.map(r => idx.find(([x]) => fid(x) === r)).filter(Boolean);
+    if (rc.length) html += `<h2>🕘 Недавно открывал</h2>` + rc.map(([x, i]) => itemHtml(x, i)).join("");
+  }
   show.forEach(c => {
-    const list = FILES.map((x, i) => [x, i]).filter(([x]) => x.cat === c && (!q || x.name.toLowerCase().includes(q)));
+    const list = idx.filter(([x]) => x.cat === c && (!q || (x.name + " " + x.cat).toLowerCase().includes(q)));
     if (!list.length) return;
-    html += `<h2>${esc(c)}</h2>` + list.map(([x, i]) =>
-      `<div class="item"><span class="ico">${ICO[x.ext] || "📄"}</span>
-         <span class="name"><b>${esc(x.name)}</b><small>${x.ext.toUpperCase()} · ${kb(x.size)} · ${x.date}</small></span>
-         <button class="btn" onclick="openFile(${i})">Открыть</button>
-       </div>`).join("");
+    html += `<h2>${esc(c)}</h2>` + list.map(([x, i]) => itemHtml(x, i)).join("");
   });
   document.getElementById("list").innerHTML = html || `<p class="empty">Ничего не найдено</p>`;
 }
+let zoom = 1;
+function zoomBy(d){
+  zoom = Math.min(4, Math.max(1, zoom + d));
+  document.querySelectorAll("#vbody canvas,#vbody img").forEach(e => e.style.width = (zoom * 100) + "%");
+  const dz = document.getElementById("dz");
+  if (dz && dz.dataset.z) dz.style.zoom = dz.dataset.z * zoom;
+}
+function toast(t){ const e = document.createElement("div"); e.className = "toast"; e.textContent = t; document.body.appendChild(e); setTimeout(() => e.remove(), 2500); }
 
 function loadScript(src){ return new Promise((ok, err) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = err; document.head.appendChild(s); }); }
 
 async function openFile(i){
   const x = FILES[i], body = document.getElementById("vbody");
+  zoom = 1; addRecent(x);
   document.getElementById("vtitle").textContent = x.name;
   document.getElementById("viewer").style.display = "flex";
   body.innerHTML = `<p class="msg">Открываю…</p>`;
@@ -146,7 +196,7 @@ async function openFile(i){
       const dz = document.getElementById("dz");
       await docx.renderAsync(blob, dz, null, {inWrapper: true, ignoreLastRenderedPageBreak: true});
       const sec = dz.querySelector("section.docx");
-      if (sec) dz.style.zoom = Math.min(1, body.clientWidth / sec.offsetWidth);
+      if (sec) { dz.dataset.z = Math.min(1, body.clientWidth / sec.offsetWidth); dz.style.zoom = dz.dataset.z; }
     } else if (x.ext === "txt") {
       body.innerHTML = `<pre style="white-space:pre-wrap;background:#fff;color:#111;margin:0;padding:12px">${esc(new TextDecoder().decode(data))}</pre>`;
     } else {
@@ -159,6 +209,7 @@ async function openFile(i){
 function closeViewer(){
   document.getElementById("viewer").style.display = "none";
   document.getElementById("vbody").innerHTML = "";
+  render();
   if (tg && tg.BackButton) { tg.BackButton.offClick(closeViewer); tg.BackButton.hide(); }
 }
 
