@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Мои файлы</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root{
+    --bg: var(--tg-theme-bg-color, #fff);
+    --text: var(--tg-theme-text-color, #111);
+    --hint: var(--tg-theme-hint-color, #888);
+    --card: var(--tg-theme-secondary-bg-color, #f1f1f4);
+    --accent: var(--tg-theme-button-color, #2a7de1);
+    --accent-text: var(--tg-theme-button-text-color, #fff);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:14px 14px 30px;background:var(--bg);color:var(--text);
+       font:16px/1.35 -apple-system,system-ui,"Segoe UI",Roboto,sans-serif}
+  h1{font-size:22px;margin:4px 0 12px}
+  .tabs{display:flex;gap:8px;overflow-x:auto;margin-bottom:10px;padding-bottom:2px}
+  .tab{flex:none;border:0;border-radius:18px;padding:8px 14px;background:var(--card);color:var(--text);font-size:15px}
+  .tab.on{background:var(--accent);color:var(--accent-text)}
+  input{width:100%;border:0;border-radius:10px;padding:10px 12px;background:var(--card);color:var(--text);font-size:15px;margin-bottom:6px}
+  h2{font-size:14px;text-transform:uppercase;letter-spacing:.04em;color:var(--hint);margin:18px 2px 8px}
+  .item{display:flex;align-items:center;gap:8px;background:var(--card);border-radius:12px;padding:12px;margin-bottom:8px}
+  .ico{font-size:26px;flex:none}
+  .name{flex:1;min-width:0;overflow-wrap:anywhere}
+  .name b{display:block;font-weight:600}
+  .name small{color:var(--hint)}
+  .btn{flex:none;border:0;border-radius:10px;padding:8px 10px;background:var(--accent);color:var(--accent-text);font-size:14px;text-decoration:none}
+  .dl{background:transparent;color:var(--accent);padding:8px 6px;font-size:20px}
+  .empty{color:var(--hint);text-align:center;margin-top:40px}
+  #viewer{display:none;position:fixed;inset:0;background:var(--bg);z-index:10;flex-direction:column}
+  #vbar{display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--card)}
+  #vtitle{flex:1;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #vbody{flex:1;overflow:auto;-webkit-overflow-scrolling:touch;background:#888}
+  #vbody canvas,#vbody img{display:block;width:100%;height:auto;margin:0 0 6px;background:#fff}
+  #vbody .msg{color:#fff;text-align:center;padding:40px 20px}
+  .docx-wrapper{background:#888 !important;padding:0 !important}
+  .docx-wrapper>section.docx{margin:0 0 6px !important;box-shadow:none !important}
+</style>
+</head>
+<body>
+<h1>🔒 Мои файлы</h1>
+<div class="tabs" id="tabs"></div>
+<input id="q" placeholder="🔍 Поиск" oninput="render()">
+<div id="list"><p class="empty">Загрузка…</p></div>
+
+<div id="viewer">
+  <div id="vbar">
+    <button class="btn" onclick="closeViewer()">✕</button>
+    <span id="vtitle"></span>
+    <a class="btn" id="vdl">⬇ Скачать</a>
+  </div>
+  <div id="vbody"></div>
+</div>
+
+<script>
+const tg = window.Telegram && Telegram.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+
+// ключ приходит в ссылке кнопки бота (?k=...) и запоминается на телефоне
+const qk = new URLSearchParams(location.search).get("k");
+if (qk) { localStorage.setItem("k", qk); history.replaceState(null, "", location.pathname); }
+const KEY_B64 = localStorage.getItem("k");
+
+const ICO = {pdf:"📕", docx:"📘", doc:"📘", png:"🖼", jpg:"🖼", jpeg:"🖼", pptx:"📊", ppt:"📊",
+             xlsx:"📗", xls:"📗", txt:"📄", cdw:"📐", frw:"📐", zip:"🗜"};
+const MIME = {pdf:"application/pdf", png:"image/png", jpg:"image/jpeg", jpeg:"image/jpeg", txt:"text/plain",
+  docx:"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  pptx:"application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  xlsx:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"};
+let FILES = [], cats = ["Все"], cur = "Все", key = null, blobUrl = null;
+
+function esc(s){ return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function b64(s){ s = s.replace(/-/g,"+").replace(/_/g,"/"); while (s.length % 4) s += "="; return Uint8Array.from(atob(s), c => c.charCodeAt(0)); }
+async function dec(buf){
+  const u = new Uint8Array(buf);
+  return crypto.subtle.decrypt({name:"AES-GCM", iv:u.slice(0,12)}, key, u.slice(12));
+}
+async function getFile(x){
+  const r = await fetch("d/" + x.id + ".bin?" + x.date + x.size, {cache:"no-cache"});
+  return dec(await r.arrayBuffer());
+}
+function kb(n){ return n > 1048576 ? (n/1048576).toFixed(1) + " МБ" : Math.max(1, Math.round(n/1024)) + " КБ"; }
+
+function render(){
+  document.getElementById("tabs").innerHTML = cats.map((c, i) =>
+    `<button class="tab ${c===cur?"on":""}" onclick="cur=cats[${i}];render()">${esc(c)}</button>`).join("");
+  const q = document.getElementById("q").value.trim().toLowerCase();
+  const show = cur === "Все" ? cats.slice(1) : [cur];
+  let html = "";
+  show.forEach(c => {
+    const list = FILES.map((x, i) => [x, i]).filter(([x]) => x.cat === c && (!q || x.name.toLowerCase().includes(q)));
+    if (!list.length) return;
+    html += `<h2>${esc(c)}</h2>` + list.map(([x, i]) =>
+      `<div class="item"><span class="ico">${ICO[x.ext] || "📄"}</span>
+         <span class="name"><b>${esc(x.name)}</b><small>${x.ext.toUpperCase()} · ${kb(x.size)} · ${x.date}</small></span>
+         <button class="btn" onclick="openFile(${i})">Открыть</button>
+       </div>`).join("");
+  });
+  document.getElementById("list").innerHTML = html || `<p class="empty">Ничего не найдено</p>`;
+}
+
+function loadScript(src){ return new Promise((ok, err) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = err; document.head.appendChild(s); }); }
+
+async function openFile(i){
+  const x = FILES[i], body = document.getElementById("vbody");
+  document.getElementById("vtitle").textContent = x.name;
+  document.getElementById("viewer").style.display = "flex";
+  body.innerHTML = `<p class="msg">Открываю…</p>`;
+  if (tg && tg.BackButton) { tg.BackButton.show(); tg.BackButton.onClick(closeViewer); }
+  try {
+    const data = await getFile(x);
+    const blob = new Blob([data], {type: MIME[x.ext] || "application/octet-stream"});
+    if (blobUrl) URL.revokeObjectURL(blobUrl);
+    blobUrl = URL.createObjectURL(blob);
+    const a = document.getElementById("vdl"); a.href = blobUrl; a.download = x.file;
+    if (x.ext === "pdf") {
+      if (!window.pdfjsLib) {
+        await loadScript("https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js");
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+      }
+      const pdf = await pdfjsLib.getDocument({data: new Uint8Array(data)}).promise;
+      body.innerHTML = "";
+      for (let p = 1; p <= pdf.numPages; p++) {
+        const page = await pdf.getPage(p);
+        const vp0 = page.getViewport({scale: 1});
+        const vp = page.getViewport({scale: (body.clientWidth * (window.devicePixelRatio || 1) * 1.5) / vp0.width});
+        const c = document.createElement("canvas"); c.width = vp.width; c.height = vp.height;
+        body.appendChild(c);
+        await page.render({canvasContext: c.getContext("2d"), viewport: vp}).promise;
+      }
+    } else if (["png","jpg","jpeg"].includes(x.ext)) {
+      body.innerHTML = `<img src="${blobUrl}">`;
+    } else if (x.ext === "docx") {
+      if (!window.docx) {
+        await loadScript("https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js");
+        await loadScript("https://cdn.jsdelivr.net/npm/docx-preview@0.3.2/dist/docx-preview.min.js");
+      }
+      body.innerHTML = `<div id="dz"></div>`;
+      const dz = document.getElementById("dz");
+      await docx.renderAsync(blob, dz, null, {inWrapper: true, ignoreLastRenderedPageBreak: true});
+      const sec = dz.querySelector("section.docx");
+      if (sec) dz.style.zoom = Math.min(1, body.clientWidth / sec.offsetWidth);
+    } else if (x.ext === "txt") {
+      body.innerHTML = `<pre style="white-space:pre-wrap;background:#fff;color:#111;margin:0;padding:12px">${esc(new TextDecoder().decode(data))}</pre>`;
+    } else {
+      body.innerHTML = `<p class="msg">Этот тип файла (${x.ext.toUpperCase()}) нельзя показать здесь.<br>Нажми «⬇ Скачать» или напиши боту /files.</p>`;
+    }
+  } catch (e) {
+    body.innerHTML = `<p class="msg">Не получилось открыть 😕<br>${esc(e.message || e)}</p>`;
+  }
+}
+function closeViewer(){
+  document.getElementById("viewer").style.display = "none";
+  document.getElementById("vbody").innerHTML = "";
+  if (tg && tg.BackButton) { tg.BackButton.offClick(closeViewer); tg.BackButton.hide(); }
+}
+
+(async () => {
+  const list = document.getElementById("list");
+  if (!KEY_B64) { list.innerHTML = `<p class="empty">🔒 Доступ закрыт.<br>Открой через кнопку «📁 Файлы» в своём боте.</p>`; return; }
+  try {
+    key = await crypto.subtle.importKey("raw", b64(KEY_B64), "AES-GCM", false, ["decrypt"]);
+    const r = await fetch("index.bin?" + Date.now());
+    FILES = JSON.parse(new TextDecoder().decode(await dec(await r.arrayBuffer())));
+    cats = ["Все", ...new Set(FILES.map(x => x.cat))];
+    render();
+  } catch (e) {
+    list.innerHTML = `<p class="empty">🔒 Не удалось расшифровать. Открой через кнопку в боте.</p>`;
+  }
+})();
+</script>
+</body>
+</html>
