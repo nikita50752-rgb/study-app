@@ -63,6 +63,7 @@ if (tg) { tg.ready(); tg.expand(); }
 
 // ключ приходит в ссылке кнопки бота (?k=...) и запоминается на телефоне
 const qk = new URLSearchParams(location.search).get("k");
+const openN = new URLSearchParams(location.search).get("open");
 if (qk) { localStorage.setItem("k", qk); history.replaceState(null, "", location.pathname); }
 const KEY_B64 = localStorage.getItem("k");
 
@@ -169,6 +170,7 @@ function closeViewer(){
     FILES = JSON.parse(new TextDecoder().decode(await dec(await r.arrayBuffer())));
     cats = ["Все", ...new Set(FILES.map(x => x.cat))];
     render();
+    if (openN !== null) openFile(+openN);
   } catch (e) {
     list.innerHTML = `<p class="empty">🔒 Не удалось расшифровать. Открой через кнопку в боте.</p>`;
   }
