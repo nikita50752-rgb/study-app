@@ -121,8 +121,9 @@ async function openFile(i){
     const a = document.getElementById("vdl"); a.href = blobUrl; a.download = x.file;
     if (x.ext === "pdf") {
       if (!window.pdfjsLib) {
-        await loadScript("https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js");
-        pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+        await loadScript("https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js");
+        await loadScript("https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js");
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js";
       }
       const pdf = await pdfjsLib.getDocument({data: new Uint8Array(data)}).promise;
       body.innerHTML = "";
